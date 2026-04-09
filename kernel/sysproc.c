@@ -6,6 +6,9 @@
 #include "spinlock.h"
 #include "proc.h"
 
+extern struct proc proc[NPROC];
+extern struct spinlock wait_lock;
+
 uint64
 sys_exit(void)
 {
@@ -96,3 +99,69 @@ sys_memsize(void)
   return myproc()->sz;
 }
 
+uint64
+sys_co_yield(void)
+{
+  int pid;
+  int value;
+  struct proc *p = myproc();
+  struct proc *target = 0;
+
+  argint(0, &pid);
+  argint(1, &value);
+
+  if(pid <= 0)
+    return -1;
+
+  if(pid == p->pid)
+    return -1;
+
+  acquire(&wait_lock);
+
+  // find target
+  for(struct proc *pp = proc; pp < &proc[NPROC]; pp++){
+    acquire(&pp->lock);
+    if(pp->pid == pid){
+      target = pp;
+      break;
+    }
+    release(&pp->lock);
+  }
+
+  if(target == 0){
+    release(&wait_lock);
+    return -1;
+  }
+
+  if(target->state == UNUSED || target->state == ZOMBIE || target->killed){
+    release(&target->lock);
+    release(&wait_lock);
+    return -1;
+  }
+
+  // target ready → exchange
+  if(target->state == SLEEPING &&
+     target->chan == target &&
+     target->trapframe->a0 == p->pid) {
+
+    int ret = target->trapframe->a1;
+
+    target->trapframe->a0 = value;
+    
+    release(&target->lock);
+    wakeup(target);               
+    
+    release(&wait_lock);
+
+    return ret;
+  }
+
+  // not ready → sleep
+  release(&target->lock);
+
+  sleep(p, &wait_lock);           
+
+  release(&wait_lock);
+
+  return p->trapframe->a0;
+}

@@ -23,6 +23,7 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 int memsize(void);
+int co_yield(int pid, int value);
 
 // ulib.c
 int stat(const char*, struct stat*);
