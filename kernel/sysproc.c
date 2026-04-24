@@ -172,16 +172,18 @@ sys_co_yield(void)
     target->trapframe->a0 = value;
 
     // Current process prepares to sleep waiting for the opposite yield.
+    // Keep p->lock across swtch, mirroring sched() lock discipline.
     acquire(&p->lock);
     p->chan = my_direct_chan;
     p->state = SLEEPING;
-    release(&p->lock);
 
     // Target runs immediately; skip RUNNABLE entirely.
     target->state = RUNNING;
-    c->proc = target;
+    release(&target->lock);
 
     release(&wait_lock);
+
+    c->proc = target;
 
     swtch(&p->context, &target->context);
 
