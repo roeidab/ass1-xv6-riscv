@@ -370,6 +370,17 @@ exit(int status)
   // Give any children to init.
   reparent(p);
 
+  // If our parent is sleeping in co_yield() waiting on us, make it return -1.
+  if(p->parent){
+    acquire(&p->parent->lock);
+    if(p->parent->state == SLEEPING &&
+       p->parent->chan == p->parent &&
+       p->parent->trapframe->a0 == p->pid){
+      p->parent->trapframe->a0 = -1;
+    }
+    release(&p->parent->lock);
+  }
+
   // Parent might be sleeping in wait().
   wakeup(p->parent);
   
@@ -444,6 +455,7 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
+  // aaa
   struct proc *p;
   struct cpu *c = mycpu();
   
