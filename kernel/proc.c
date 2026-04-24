@@ -374,7 +374,8 @@ exit(int status)
   if(p->parent){
     acquire(&p->parent->lock);
     if(p->parent->state == SLEEPING &&
-       p->parent->chan == p->parent &&
+       (p->parent->chan == p->parent ||
+        p->parent->chan == &p->parent->context) &&
        p->parent->trapframe->a0 == p->pid){
       p->parent->trapframe->a0 = -1;
     }

@@ -108,8 +108,8 @@ sys_co_yield(void)
   struct proc *target = 0;
   struct cpu *c = mycpu();
 
-  // Marker for a process sleeping due to direct co_yield handoff.
-  void *my_direct_chan = (void *)((uint64)p + 1);
+  // Per-process direct wait channel for co_yield handoff.
+  void *my_direct_chan = &p->context;
 
   argint(0, &pid);
   argint(1, &value);
@@ -165,7 +165,7 @@ sys_co_yield(void)
 
   // Direct waiter (already in co_yield direct sleep marker): direct swtch.
   if(target->state == SLEEPING &&
-     target->chan == (void *)((uint64)target + 1) &&
+      target->chan == &target->context &&
      target->trapframe->a0 == p->pid) {
 
     // Target receives my newly offered value when it resumes.
