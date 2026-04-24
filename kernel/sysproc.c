@@ -106,6 +106,10 @@ sys_co_yield(void)
   int value;
   struct proc *p = myproc();
   struct proc *target = 0;
+  struct cpu *c = mycpu();
+
+  // Marker for a process sleeping due to direct co_yield handoff.
+  void *my_direct_chan = (void *)((uint64)p + 1);
 
   argint(0, &pid);
   argint(1, &value);
@@ -116,15 +120,20 @@ sys_co_yield(void)
   if(pid == p->pid)
     return -1;
 
+  // Save the value this process is offering to the peer.
+  p->trapframe->a1 = value;
+
   acquire(&wait_lock);
 
-  // find target
-  for(struct proc *pp = proc; pp < &proc[NPROC]; pp++){
+  // Find target and keep target->lock held when found.
+  for(struct proc *pp = proc; pp < &proc[NPROC]; pp++) {
     acquire(&pp->lock);
+
     if(pp->pid == pid){
       target = pp;
       break;
     }
+
     release(&pp->lock);
   }
 
@@ -133,33 +142,65 @@ sys_co_yield(void)
     return -1;
   }
 
+  // Basic error cases.
   if(target->state == UNUSED || target->state == ZOMBIE || target->killed){
     release(&target->lock);
     release(&wait_lock);
     return -1;
   }
 
-  // target ready → exchange
+  // Slow rendezvous waiter (sleep(p,&wait_lock) path): wake via scheduler.
   if(target->state == SLEEPING &&
      target->chan == target &&
      target->trapframe->a0 == p->pid) {
-
     int ret = target->trapframe->a1;
 
     target->trapframe->a0 = value;
-    
     release(&target->lock);
-    wakeup(target);               
-    
+    wakeup(target);
     release(&wait_lock);
 
     return ret;
   }
 
-  // not ready → sleep
-  release(&target->lock);
+  // Direct waiter (already in co_yield direct sleep marker): direct swtch.
+  if(target->state == SLEEPING &&
+     target->chan == (void *)((uint64)target + 1) &&
+     target->trapframe->a0 == p->pid) {
 
-  sleep(p, &wait_lock);           
+    // Target receives my newly offered value when it resumes.
+    target->trapframe->a0 = value;
+
+    // Current process prepares to sleep waiting for the opposite yield.
+    acquire(&p->lock);
+    p->chan = my_direct_chan;
+    p->state = SLEEPING;
+    release(&p->lock);
+
+    // Target runs immediately; skip RUNNABLE entirely.
+    target->state = RUNNING;
+    c->proc = target;
+
+    release(&wait_lock);
+
+    swtch(&p->context, &target->context);
+
+    // When p is resumed later by the opposite yield, continue here.
+    c->proc = p;
+    p->chan = 0;
+
+    if(!holding(&p->lock))
+      acquire(&p->lock);
+    p->state = RUNNING;
+    release(&p->lock);
+
+    return p->trapframe->a0;
+  }
+
+  // Target is not ready yet: wait until it yields back.
+  p->trapframe->a0 = pid;
+  release(&target->lock);
+  sleep(p, &wait_lock);
 
   release(&wait_lock);
 

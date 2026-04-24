@@ -466,6 +466,8 @@ scheduler(void)
         // It should have changed its p->state before coming back.
         c->proc = 0;
       }
+      if(!holding(&p->lock))
+        printf("scheduler bad lock pid=%d state=%d\n", p->pid, p->state);
       release(&p->lock);
     }
   }
