@@ -370,16 +370,20 @@ exit(int status)
   // Give any children to init.
   reparent(p);
 
-  // If our parent is sleeping in co_yield() waiting on us, make it return -1.
-  if(p->parent){
-    acquire(&p->parent->lock);
-    if(p->parent->state == SLEEPING &&
-       (p->parent->chan == p->parent ||
-        p->parent->chan == &p->parent->context) &&
-       p->parent->trapframe->a0 == p->pid){
-      p->parent->trapframe->a0 = -1;
+  // Wake any process sleeping in co_yield() waiting on this pid.
+  for(struct proc *pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp == p)
+      continue;
+
+    acquire(&pp->lock);
+    if(pp->state == SLEEPING &&
+       pp->trapframe &&
+       pp->trapframe->a0 == p->pid &&
+       (pp->chan == pp || pp->chan == &pp->context)){
+      pp->trapframe->a0 = -1;
+      pp->state = RUNNABLE;
     }
-    release(&p->parent->lock);
+    release(&pp->lock);
   }
 
   // Parent might be sleeping in wait().
