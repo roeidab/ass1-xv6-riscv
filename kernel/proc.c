@@ -371,6 +371,7 @@ exit(int status)
   reparent(p);
 
   // Wake any process sleeping in co_yield() waiting on this pid.
+  // This is an error wakeup, not a successful coroutine handoff.
   for(struct proc *pp = proc; pp < &proc[NPROC]; pp++){
     if(pp == p)
       continue;
@@ -379,7 +380,7 @@ exit(int status)
     if(pp->state == SLEEPING &&
        pp->trapframe &&
        pp->trapframe->a0 == p->pid &&
-       (pp->chan == pp || pp->chan == &pp->context)){
+       pp->chan == &pp->context){
       pp->trapframe->a0 = -1;
       pp->state = RUNNABLE;
     }
@@ -460,7 +461,6 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  // aaa
   struct proc *p;
   struct cpu *c = mycpu();
   
@@ -481,10 +481,24 @@ scheduler(void)
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
+        // co_yield direct handoff can cause a different process to be the
+        // one that eventually switches back to the scheduler.  In that case
+        // the original p->lock should already be gone, and the process that
+        // actually returned through sched() must still hold its own lock.
+        struct proc *returned = c->proc;
         c->proc = 0;
+
+        if(returned != p){
+          if(holding(&p->lock))
+            panic("scheduler stale p->lock");
+          if(returned == 0 || !holding(&returned->lock))
+            panic("scheduler missing returned->lock");
+          release(&returned->lock);
+          continue;
+        }
       }
       if(!holding(&p->lock))
-        printf("scheduler bad lock pid=%d state=%d\n", p->pid, p->state);
+        panic("scheduler p->lock");
       release(&p->lock);
     }
   }
