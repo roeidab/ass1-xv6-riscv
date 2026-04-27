@@ -99,6 +99,12 @@ sys_memsize(void)
   return myproc()->sz;
 }
 
+// To add comment about the exit because of the mixing of -1
+/*
+a0 = what I receive (return value)
+a1 = what I offer (my yielded value)
+a2 = who I'm waiting for (temporary marker, cleared after resumption)
+*/
 uint64
 sys_co_yield(void)
 {
@@ -150,20 +156,21 @@ sys_co_yield(void)
     return -1;
   }
 
+  // Direct handoff: target is already waiting in co_yield for us.
+  // a0 = syscall return value (set by peer before switching back)
+  // a1 = value offered by peer (set when peer enters co_yield)
+  // a2 = waiting-for PID (set when peer sleeps in co_yield)
   if(target->state == SLEEPING &&
      target->chan == &target->context &&
-     target->trapframe->a0 == p->pid) {
-    // Direct handoff protocol.  The peer is already parked in sleep(),
-    // so it expects to resume with target->lock held.  The caller becomes
-    // the next co_yield sleeper, but its lock is released before swtch()
-    // so the peer can acquire it when yielding back.  This relies on
-    // CPUS=1: while target->lock is held, interrupts remain disabled, so
-    // the scheduler cannot observe the caller's transient sleeping state
-    // before the direct switch.
-    uint64 received = target->trapframe->a1;
+     target->trapframe->a2 == p->pid) {
+    // The peer is parked on its direct context channel, waiting for our pid.
+    // We set the peer's return value and push current process to wait,
+    // then swtch directly to peer. When we resume later, our return value
+    // will be in a0 (set by the peer before switching back to us).
 
     acquire(&p->lock);
-    p->trapframe->a0 = pid;
+    p->trapframe->a0 = -1;  // Default error if woken without successful handoff
+    p->trapframe->a2 = pid;
     target->trapframe->a0 = value;
     p->chan = &p->context;
     p->state = SLEEPING;
@@ -176,34 +183,48 @@ sys_co_yield(void)
 
     c->proc = p;
     p->chan = 0;
+    p->trapframe->a2 = 0;
+
+    uint64 ret = p->trapframe->a0;
+
     release(&p->lock);
-    return received;
+    return ret;
   }
 
-  if(target->state == SLEEPING && target->chan == &target->context){
-    // The target is a co_yield sleeper, but it is waiting for a different
-    // peer.  Without extra per-process state we cannot safely queue multiple
-    // contenders for the same coroutine endpoint, so fail instead of mixing
-    // values or creating a three-process deadlock.
-    release(&target->lock);
+  // Target is alive but not already waiting for us.
+  // If it is RUNNABLE, give it the CPU directly instead of using sleep/sched.
+  if(target->state == RUNNABLE)
+  {
+    acquire(&p->lock);
+
+    // Mark current process as waiting in co_yield for this target.
+    p->trapframe->a0 = -1;  // Default error if woken without successful handoff
+    p->trapframe->a2 = pid;
+    p->chan = &p->context;
+    p->state = SLEEPING;
+
+    // Run target directly, bypassing the scheduler.
+    target->state = RUNNING;
+
     release(&wait_lock);
-    return -1;
+    c->proc = target;
+    release(&p->lock);
+
+    swtch(&p->context, &target->context);
+
+    // We resume here only when some later co_yield switches directly back to us.
+    c->proc = p;
+    p->chan = 0;
+    p->trapframe->a2 = 0;
+
+    uint64 ret = p->trapframe->a0;
+
+    release(&p->lock);
+    return ret;
   }
 
+  // Target is not prepared and also not runnable, so we cannot safely switch to it.
   release(&target->lock);
-
-  // The target is alive but not ready for a direct handoff.  Park this
-  // process as a co_yield sleeper.  A later successful rendezvous must
-  // switch directly into this context; exit()/kill() may wake it only to
-  // report failure.
-  p->trapframe->a0 = pid;
-  sleep(&p->context, &wait_lock);
-
-  if(killed(p)){
-    release(&wait_lock);
-    return -1;
-  }
-
   release(&wait_lock);
-  return p->trapframe->a0;
+  return -1;
 }

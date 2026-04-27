@@ -394,6 +394,81 @@ void test_nonparent_target_exit(void)
     fail("non-parent target exit", "waiter stayed blocked or wrong return");
 }
 
+
+// ---------------------------------------------------------------
+// Test 14: exit wakes process parked by direct RUNNABLE handoff
+//   Parent co_yields to a RUNNABLE child.
+//   Parent becomes a co_yield sleeper and switches directly to child.
+//   Child exits without yielding back.
+//   exit() must wake parent and make co_yield return -1.
+// ---------------------------------------------------------------
+void test_exit_wakes_waiter_after_runnable_handoff(void)
+{
+  int pid2 = fork();
+  if(pid2 < 0){
+    fail("exit wakes waiter after runnable handoff", "fork failed");
+    return;
+  }
+
+  if(pid2 == 0){
+    // If parent switches directly to us, we exit without co_yielding back.
+    exit(0);
+  }
+
+  int val = co_yield(pid2, 123);
+  wait(0);
+
+  if(val == -1)
+    pass("exit wakes waiter after runnable handoff");
+  else
+    fail("exit wakes waiter after runnable handoff", "expected -1");
+}
+
+
+// ---------------------------------------------------------------
+// Test 15: dynamic values should not return stale a0/a1 data
+//   Each round uses a different value.
+//   This catches bugs where co_yield returns an old saved value
+//   instead of the current value written into a0 by the peer.
+// ---------------------------------------------------------------
+void test_dynamic_values_no_stale_return(void)
+{
+  int pid1 = getpid();
+  int pid2 = fork();
+
+  if(pid2 < 0){
+    fail("dynamic values no stale return", "fork failed");
+    return;
+  }
+
+  if(pid2 == 0){
+    for(int i = 1; i <= 5; i++){
+      co_yield(pid1, 100 + i);
+    }
+    exit(0);
+  }
+
+  int ok = 1;
+
+  for(int i = 1; i <= 5; i++){
+    int val = co_yield(pid2, 200 + i);
+
+    if(val != 100 + i){
+      printf("  round %d: got %d expected %d\n", i, val, 100 + i);
+      ok = 0;
+      break;
+    }
+  }
+
+  kill(pid2);
+  wait(0);
+
+  if(ok)
+    pass("dynamic values no stale return");
+  else
+    fail("dynamic values no stale return", "stale or wrong return value");
+}
+
 // ---------------------------------------------------------------
 int main(int argc, char *argv[])
 {
@@ -415,7 +490,8 @@ int main(int argc, char *argv[])
   test_kill_coyield_sleeper();         // 11
   test_concurrent_pairs();             // 12
   test_nonparent_target_exit();        // 13
-
+  test_exit_wakes_waiter_after_runnable_handoff(); // 14
+  test_dynamic_values_no_stale_return(); // 15
   printf("\n=== Results: %d/%d passed ===\n",
          test_num - fail_count, test_num);
   if (fail_count)

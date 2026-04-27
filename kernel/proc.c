@@ -379,7 +379,7 @@ exit(int status)
     acquire(&pp->lock);
     if(pp->state == SLEEPING &&
        pp->trapframe &&
-       pp->trapframe->a0 == p->pid &&
+       pp->trapframe->a2 == p->pid &&
        pp->chan == &pp->context){
       pp->trapframe->a0 = -1;
       pp->state = RUNNABLE;
