@@ -480,11 +480,8 @@ scheduler(void)
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        // co_yield direct handoff can cause a different process to be the
-        // one that eventually switches back to the scheduler.  In that case
-        // the original p->lock should already be gone, and the process that
-        // actually returned through sched() must still hold its own lock.
+        // co_yield may cause a different process to return here instead of p.
+        // If that happens, p's lock should already be released
         struct proc *returned = c->proc;
         c->proc = 0;
 
