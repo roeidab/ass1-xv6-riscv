@@ -189,7 +189,6 @@ void test_partner_exits_while_sleeping(void)
   if (val == -1)
     pass("partner exits while sleeping");
   else
-    //printf("  got %d expected -1\n", val);
     fail("partner exits while sleeping", "expected -1");
 }
 
@@ -426,7 +425,66 @@ void test_exit_wakes_waiter_after_runnable_handoff(void)
 
 
 // ---------------------------------------------------------------
-// Test 15: dynamic values should not return stale a0/a1 data
+// Test 15: target already marked killed
+//   Child spins in user space so it stays alive after kill(pid),
+//   but co_yield should still reject it because killed is set.
+// ---------------------------------------------------------------
+void test_target_already_killed(void)
+{
+  int pid2 = fork();
+  if(pid2 < 0){
+    fail("target already killed", "fork failed");
+    return;
+  }
+
+  if(pid2 == 0){
+    volatile int x = 0;
+    for(;;)
+      x++;
+  }
+
+  sleep(5); // let child start running first
+  kill(pid2);
+
+  int val = co_yield(pid2, 42);
+  wait(0);
+
+  if(val == -1)
+    pass("target already killed");
+  else
+    fail("target already killed", "expected -1");
+}
+
+// ---------------------------------------------------------------
+// Test 16: target sleeping on a normal wait channel
+//   Child is sleeping in sleep(), not parked in co_yield.
+//   co_yield should not try to hand off to it.
+// ---------------------------------------------------------------
+void test_target_sleeping_elsewhere(void)
+{
+  int pid2 = fork();
+  if(pid2 < 0){
+    fail("target sleeping elsewhere", "fork failed");
+    return;
+  }
+
+  if(pid2 == 0){
+    sleep(50);
+    exit(0);
+  }
+
+  sleep(5); // let child block in sleep()
+  int val = co_yield(pid2, 42);
+  wait(0);
+
+  if(val == -1)
+    pass("target sleeping elsewhere");
+  else
+    fail("target sleeping elsewhere", "expected -1");
+}
+
+// ---------------------------------------------------------------
+// Test 17: dynamic values should not return stale a0 data
 //   Each round uses a different value.
 //   This catches bugs where co_yield returns an old saved value
 //   instead of the current value written into a0 by the peer.
@@ -491,7 +549,9 @@ int main(int argc, char *argv[])
   test_concurrent_pairs();             // 12
   test_nonparent_target_exit();        // 13
   test_exit_wakes_waiter_after_runnable_handoff(); // 14
-  test_dynamic_values_no_stale_return(); // 15
+  test_target_already_killed();        // 15
+  test_target_sleeping_elsewhere();    // 16
+  test_dynamic_values_no_stale_return(); // 17
   printf("\n=== Results: %d/%d passed ===\n",
          test_num - fail_count, test_num);
   if (fail_count)
