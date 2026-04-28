@@ -46,7 +46,7 @@ sys_sbrk(void)
 
   argint(0, &n);
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+  if (growproc(n) < 0)
     return -1;
   return addr;
 }
@@ -60,8 +60,10 @@ sys_sleep(void)
   argint(0, &n);
   acquire(&tickslock);
   ticks0 = ticks;
-  while(ticks - ticks0 < n){
-    if(killed(myproc())){
+  while (ticks - ticks0 < n)
+  {
+    if (killed(myproc()))
+    {
       release(&tickslock);
       return -1;
     }
@@ -99,14 +101,10 @@ sys_memsize(void)
   return myproc()->sz;
 }
 
-// co_yield parks the caller in SLEEPING state and relies on a later
-// co_yield from the partner to hand back a return value directly.
-// If the partner exits or is killed first, exit()/kill() must make
-// the parked process runnable again so co_yield can return -1.
+// exit()/kill() must wake a process parked here if its partner disappears.
 /*
 a0 = syscall return value for this process
-a2 = temporary kernel bookkeeping: pid this process is waiting for
-     while parked in co_yield
+a2 = pid this process is waiting for while parked in co_yield
 */
 uint64
 sys_co_yield(void)
@@ -128,7 +126,7 @@ sys_co_yield(void)
 
   acquire(&wait_lock);
 
-  // Find target and keep target->lock held when found.
+  // Find target pid and keep its lock
   for (struct proc *pp = proc; pp < &proc[NPROC]; pp++)
   {
     acquire(&pp->lock);
@@ -148,7 +146,7 @@ sys_co_yield(void)
     return -1;
   }
 
-  // Basic error cases.
+  // Basic error cases - invalid target
   if (target->trapframe == 0 ||
       target->state == UNUSED ||
       target->state == ZOMBIE ||
@@ -166,12 +164,6 @@ sys_co_yield(void)
       target->chan == &target->context &&
       target->trapframe->a2 == p->pid)
   {
-    // The peer is parked in the co_yield sleep state on its context channel,
-    // and a2 confirms it is specifically waiting for our pid. We write the
-    // value that the peer's co_yield will return, then park the current
-    // process and switch directly to the peer. When we resume later, our
-    // own return value will already be staged in a0.
-
     acquire(&p->lock);
     p->trapframe->a0 = -1; // Default error if woken without successful handoff
     p->trapframe->a2 = pid;
@@ -201,7 +193,7 @@ sys_co_yield(void)
   {
     acquire(&p->lock);
 
-    // Mark current process as waiting in co_yield for this target.
+    // Park current process waiting for target
     p->trapframe->a0 = -1; // Default error if woken without successful handoff
     p->trapframe->a2 = pid;
     p->chan = &p->context;
@@ -216,8 +208,7 @@ sys_co_yield(void)
 
     swtch(&p->context, &target->context);
 
-    // We resume here when another co_yield switches back to us, or when
-    // exit()/kill() makes us runnable again with an error return in a0.
+    // Could resume from co_yield or from exit/kill
     c->proc = p;
     p->chan = 0;
     p->trapframe->a2 = 0;
@@ -228,7 +219,7 @@ sys_co_yield(void)
     return ret;
   }
 
-  // Target is not prepared and also not runnable, so we cannot safely switch to it.
+  // Target is not prepared or runnable, can't switch to it
   release(&target->lock);
   release(&wait_lock);
   return -1;
